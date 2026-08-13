@@ -1,9 +1,208 @@
 name: Build and Release Shittim Server
 
-# The release number comes from Directory.Build.props, which is also what the server
-# assemblies and ShittimControlCenter/package.json carry. Bump it there (and in
-# package.json) before running this - the tag guard below refuses to release a version
-# that has already been tagged rather than quietly shipping a second build under it.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+
+          - name: windows-x64
+            os: windows-latest
+            runtime: win-x64
+            archive: Shittim-Server-windows-x64
+
+          - name: linux-x64
+            os: ubuntu-latest
+            runtime: linux-x64
+            archive: Shittim-Server-linux-x64
+
+          - name: linux-arm64
+            os: ubuntu-latest
+            runtime: linux-arm64
+            archive: Shittim-Server-linux-arm64
+
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+
+      - name: Run tests
+        if: matrix.runtime == 'win-x64'
+        run: |
+          dotnet test ./Shittim-Server.Tests/Shittim-Server.Tests.csproj -c Release --nologo
+
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+
+          $props = Get-Content ./Directory.Build.props -Raw
+
+          if ($props -notmatch '<Version>([^<]+)</Version>') {
+              throw "No Version found"
+          }
+
+          $version = $Matches[1]
+
+          $package = (Get-Content ./ShittimControlCenter/package.json -Raw | ConvertFrom-Json).version
+
+
+          if ($package -ne $version) {
+              throw "Version mismatch"
+          }
+
+
+          $tag="v$version"
+
+
+          if(git tag --list $tag){
+              throw "$tag already exists"
+          }
+
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+
+
+      - name: Publish server runtime
+        run: |
+
+          dotnet publish ./Shittim-Server/Shittim-Server.csproj `
+          -c Release `
+          -r ${{ matrix.runtime }} `
+          --self-contained true `
+          -o ./server-runtime
+
+
+
+      - name: Package release
+        shell: pwsh
+        run: |
+
+          $folder="${{ matrix.archive }}"
+          
+          if(Test-Path $folder){
+             Remove-Item $folder -Recurse -Force
+          }
+
+
+          mkdir $folder
+
+
+          Copy-Item ./server-runtime "$folder/server-runtime" -Recurse
+
+
+          if(Test-Path README.md){
+             Copy-Item README.md "$folder/README.md"
+          }
+
+
+          if(Test-Path Scripts){
+             Copy-Item Scripts "$folder/Scripts" -Recurse
+          }
+
+
+          Compress-Archive `
+          -Path "$folder/*" `
+          -DestinationPath "${folder}-${{ steps.version.outputs.tag }}.zip"
+
+
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+
+          name: ${{ matrix.archive }}
+
+          path: |
+            ${{ matrix.archive }}-${{ steps.version.outputs.tag }}.zip
+
+
+
+
+  release:
+
+    needs: build
+
+    runs-on: ubuntu-latest
+
+
+    steps:
+
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+
+          VERSION=$(grep -oP '(?<=<Version>).*?(?=</Version>)' Directory.Build.props)
+
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+
+
+
+      - name: Create tag
+        run: |
+
+          git config user.name github-actions[bot]
+
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+
+          git tag "${{ steps.version.outputs.tag }}"
+
+          git push origin "${{ steps.version.outputs.tag }}"
+
+
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+
+          tag_name: ${{ steps.version.outputs.tag }}
+
+          name: ${{ steps.version.outputs.tag }}
+
+          files: |
+
+            release/**/*.zip
+
+          generate_release_notes: truename: Build and Release Shittim Server
 
 on:
   workflow_dispatch:
@@ -12,92 +211,199 @@ permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    runs-on: windows-latest
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+
+          - name: windows-x64
+            os: windows-latest
+            runtime: win-x64
+            archive: Shittim-Server-windows-x64
+
+          - name: linux-x64
+            os: ubuntu-latest
+            runtime: linux-x64
+            archive: Shittim-Server-linux-x64
+
+          - name: linux-arm64
+            os: ubuntu-latest
+            runtime: linux-arm64
+            archive: Shittim-Server-linux-arm64
+
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
 
-      - name: Run tests
-        shell: pwsh
-        run: |
-          dotnet test .\Shittim-Server.Tests\Shittim-Server.Tests.csproj -c Release --nologo
 
-      - name: Resolve release tag
+      - name: Run tests
+        if: matrix.runtime == 'win-x64'
+        run: |
+          dotnet test ./Shittim-Server.Tests/Shittim-Server.Tests.csproj -c Release --nologo
+
+
+      - name: Resolve version
         id: version
         shell: pwsh
         run: |
-          $props = Get-Content .\Directory.Build.props -Raw
+
+          $props = Get-Content ./Directory.Build.props -Raw
+
           if ($props -notmatch '<Version>([^<]+)</Version>') {
-            throw "no <Version> in Directory.Build.props"
+              throw "No Version found"
           }
+
           $version = $Matches[1]
 
-          $package = (Get-Content .\ShittimControlCenter\package.json -Raw | ConvertFrom-Json).version
+          $package = (Get-Content ./ShittimControlCenter/package.json -Raw | ConvertFrom-Json).version
+
+
           if ($package -ne $version) {
-            throw "Directory.Build.props is $version but ShittimControlCenter/package.json is $package"
+              throw "Version mismatch"
           }
 
-          $tag = "v$version"
-          if (git tag --list $tag) {
-            throw "$tag already exists - bump Directory.Build.props and package.json before releasing"
+
+          $tag="v$version"
+
+
+          if(git tag --list $tag){
+              throw "$tag already exists"
           }
 
-          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          "asset_name=Shittim-Server-$tag.zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+
 
       - name: Publish server runtime
-        shell: pwsh
         run: |
-          dotnet publish .\Shittim-Server\Shittim-Server.csproj -c Release -r win-x64 --self-contained true -o .\server-runtime
 
-      - name: Verify published binary version
+          dotnet publish ./Shittim-Server/Shittim-Server.csproj `
+          -c Release `
+          -r ${{ matrix.runtime }} `
+          --self-contained true `
+          -o ./server-runtime
+
+
+
+      - name: Package release
         shell: pwsh
         run: |
-          $exe = Get-Item .\server-runtime\Shittim-Server.exe
-          $shipped = $exe.VersionInfo.FileVersion
-          $expected = "${{ steps.version.outputs.tag }}".TrimStart('v')
-          if (-not $shipped.StartsWith($expected)) {
-            throw "published binary reports $shipped, expected $expected"
+
+          $folder="${{ matrix.archive }}"
+          
+          if(Test-Path $folder){
+             Remove-Item $folder -Recurse -Force
           }
 
-      - name: Package release archive
-        shell: pwsh
-        run: |
-          $packageDir = ".\release-package"
-          $assetName = "${{ steps.version.outputs.asset_name }}"
-          if (Test-Path $packageDir) {
-            Remove-Item $packageDir -Recurse -Force
+
+          mkdir $folder
+
+
+          Copy-Item ./server-runtime "$folder/server-runtime" -Recurse
+
+
+          if(Test-Path README.md){
+             Copy-Item README.md "$folder/README.md"
           }
 
-          New-Item -ItemType Directory -Path $packageDir | Out-Null
 
-          Copy-Item ".\server-runtime" "$packageDir\server-runtime" -Recurse
-          Copy-Item ".\README.md" "$packageDir\README.md"
-          Copy-Item ".\Scripts" "$packageDir\Scripts" -Recurse
+          if(Test-Path Scripts){
+             Copy-Item Scripts "$folder/Scripts" -Recurse
+          }
 
-          Compress-Archive -Path "$packageDir\*" -DestinationPath ".\$assetName" -Force
 
-      - name: Create Git tag
-        shell: pwsh
+          Compress-Archive `
+          -Path "$folder/*" `
+          -DestinationPath "${folder}-${{ steps.version.outputs.tag }}.zip"
+
+
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+
+          name: ${{ matrix.archive }}
+
+          path: |
+            ${{ matrix.archive }}-${{ steps.version.outputs.tag }}.zip
+
+
+
+
+  release:
+
+    needs: build
+
+    runs-on: ubuntu-latest
+
+
+    steps:
+
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+
+      - name: Resolve version
+        id: version
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          VERSION=$(grep -oP '(?<=<Version>).*?(?=</Version>)' Directory.Build.props)
+
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+
+
+
+      - name: Create tag
+        run: |
+
+          git config user.name github-actions[bot]
+
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+
+
           git tag "${{ steps.version.outputs.tag }}"
+
           git push origin "${{ steps.version.outputs.tag }}"
 
-      - name: Create GitHub release
+
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+
           tag_name: ${{ steps.version.outputs.tag }}
+
           name: ${{ steps.version.outputs.tag }}
-          files: ${{ steps.version.outputs.asset_name }}
+
+          files: |
+
+            release/**/*.zip
+
           generate_release_notes: true
